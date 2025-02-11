@@ -1,29 +1,34 @@
+import sys
 import asyncio
 import queue
 import threading
 import time
 import uuid
 import logging
+
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, NamedTuple
-
 from fastapi import WebSocket
 
-from .service import TranscriptionService
+# from .service import TranscriptionService
+from .vn_stt_service import VNSTTTranscriptionService
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Audio parameters - must match frontend MediaRecorder settings
-CHANNELS = 1
-SAMPLE_WIDTH = 2  # 16-bit audio
-SAMPLE_RATE = 16000
 
-# Audio storage configuration
-AUDIO_STORAGE_DIR = Path("audio_chunks")
-if not AUDIO_STORAGE_DIR.exists():
-    AUDIO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+# # Audio parameters - must match frontend MediaRecorder settings
+# CHANNELS = 1
+# SAMPLE_WIDTH = 2  # 16-bit audio
+# SAMPLE_RATE = 16000
+
+
+# # Audio storage configuration
+# AUDIO_STORAGE_DIR = Path("audio_chunks")
+# if not AUDIO_STORAGE_DIR.exists():
+#     AUDIO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class TranscriptionRequest(NamedTuple):
@@ -31,14 +36,14 @@ class TranscriptionRequest(NamedTuple):
     session_id: str
     audio_data: bytes
     timestamp: float
-    audio_file_path: str
+    # audio_file_path: str
 
 
 class TranscriptionWorker(threading.Thread):
     """Single worker thread that processes all transcription requests sequentially"""
-    def __init__(self, transcription_service: TranscriptionService, loop: asyncio.AbstractEventLoop):
+    def __init__(self, vn_stt_transcription_service: VNSTTTranscriptionService, loop: asyncio.AbstractEventLoop):
         super().__init__()
-        self.transcription_service = transcription_service
+        self.vn_stt_transcription_service = vn_stt_transcription_service
         self.request_queue = queue.Queue(maxsize=100)
         self.result_queues: Dict[str, asyncio.Queue] = {}
         self.running = True
@@ -59,7 +64,9 @@ class TranscriptionWorker(threading.Thread):
 
                 try:
                     # Process transcription
-                    transcription = self.transcription_service.transcribe(request.audio_data)
+                    # transcription = self.transcription_service.transcribe(request.audio_data)
+                    transcription = self.vn_stt_transcription_service.transcribe(request.audio_data)
+                    logger.info(f"Transcribed text: {transcription}")
                     
                     # If session still exists, send result
                     if request.session_id in self.result_queues:
@@ -68,8 +75,7 @@ class TranscriptionWorker(threading.Thread):
                             result_queue.put({
                                 "type": "transcription",
                                 "text": transcription,
-                                "timestamp": request.timestamp,
-                                "audio_file": request.audio_file_path
+                                "timestamp": request.timestamp
                             }),
                             self.loop
                         )
@@ -85,54 +91,54 @@ class TranscriptionWorker(threading.Thread):
         self.request_queue.put(None)  # Unblock the queue if waiting
 
 
-class AudioSaveWorker(threading.Thread):
-    """Worker thread for saving audio chunks to disk"""
-    def __init__(self, save_queue: queue.Queue):
-        super().__init__()
-        self.save_queue = save_queue
-        self.running = True
+# class AudioSaveWorker(threading.Thread):
+#     """Worker thread for saving audio chunks to disk"""
+#     def __init__(self, save_queue: queue.Queue):
+#         super().__init__()
+#         self.save_queue = save_queue
+#         self.running = True
 
-    def run(self):
-        """Process audio save requests"""
-        while self.running:
-            try:
-                # Get save request with timeout to allow checking running flag
-                try:
-                    session_id, audio_data, timestamp, response_queue = self.save_queue.get(timeout=0.5)
-                except queue.Empty:
-                    continue
+#     def run(self):
+#         """Process audio save requests"""
+#         while self.running:
+#             try:
+#                 # Get save request with timeout to allow checking running flag
+#                 try:
+#                     session_id, audio_data, timestamp, response_queue = self.save_queue.get(timeout=0.5)
+#                 except queue.Empty:
+#                     continue
 
-                try:
-                    # Save the audio chunk
-                    file_path = save_audio_chunk(session_id, audio_data, timestamp)
-                    logger.info(f"Saved WAV audio chunk: {file_path}")
-                    # Send the file path back to the requester
-                    response_queue.put(file_path)
-                except Exception as e:
-                    logger.error(f"Error saving audio chunk: {e}")
-                    response_queue.put(None)
+#                 try:
+#                     # Save the audio chunk
+#                     file_path = save_audio_chunk(session_id, audio_data, timestamp)
+#                     logger.info(f"Saved WAV audio chunk: {file_path}")
+#                     # Send the file path back to the requester
+#                     response_queue.put(file_path)
+#                 except Exception as e:
+#                     logger.error(f"Error saving audio chunk: {e}")
+#                     response_queue.put(None)
 
-            except Exception as e:
-                logger.error(f"Error in audio save worker: {e}")
+#             except Exception as e:
+#                 logger.error(f"Error in audio save worker: {e}")
 
-    def stop(self):
-        """Signal the thread to stop"""
-        self.running = False
+#     def stop(self):
+#         """Signal the thread to stop"""
+#         self.running = False
 
 
-def save_audio_chunk(session_id: str, audio_data: bytes, timestamp: float) -> str:
-    """Save WAV audio chunk to file and return the file path"""
-    timestamp_str = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S_%f')
-    filename = f"{session_id}_{timestamp_str}.wav"
-    file_path = AUDIO_STORAGE_DIR / filename
+# def save_audio_chunk(session_id: str, audio_data: bytes, timestamp: float) -> str:
+#     """Save WAV audio chunk to file and return the file path"""
+#     timestamp_str = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S_%f')
+#     filename = f"{session_id}_{timestamp_str}.wav"
+#     file_path = AUDIO_STORAGE_DIR / filename
     
-    try:
-        with open(file_path, 'wb') as f:
-            f.write(audio_data)
-        return str(file_path)
-    except Exception as e:
-        logger.error(f"Error saving audio chunk: {e}")
-        raise
+#     try:
+#         with open(file_path, 'wb') as f:
+#             f.write(audio_data)
+#         return str(file_path)
+#     except Exception as e:
+#         logger.error(f"Error saving audio chunk: {e}")
+#         raise
 
 
 class TranscriptionHandler:
@@ -148,7 +154,7 @@ class TranscriptionHandler:
     def __init__(self):
         if hasattr(self, '_initialized') and self._initialized:
             return
-        self.transcription_service = TranscriptionService()
+        self.vn_stt_transcription_service = VNSTTTranscriptionService()
         self.active_connections: Dict[str, WebSocket] = {}
         self.output_queues: Dict[str, asyncio.Queue] = {}
         
@@ -161,13 +167,13 @@ class TranscriptionHandler:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
         
-        self.worker = TranscriptionWorker(self.transcription_service, self.loop)
+        self.worker = TranscriptionWorker(self.vn_stt_transcription_service, self.loop)
         self.worker.start()
 
-        # Initialize audio save worker
-        self.audio_save_queue = queue.Queue(maxsize=100)
-        self.audio_save_worker = AudioSaveWorker(self.audio_save_queue)
-        self.audio_save_worker.start()
+        # # Initialize audio save worker
+        # self.audio_save_queue = queue.Queue(maxsize=100)
+        # self.audio_save_worker = AudioSaveWorker(self.audio_save_queue)
+        # self.audio_save_worker.start()
         
         self._initialized = True
 
@@ -179,7 +185,7 @@ class TranscriptionHandler:
         self.active_connections[session_id] = websocket
 
         # Initialize output queue and add to worker
-        self.output_queues[session_id] = asyncio.Queue(maxsize=100)
+        self.output_queues[session_id] = asyncio.Queue(maxsize=1000)
         self.worker.result_queues[session_id] = self.output_queues[session_id]
 
         # Start async tasks for WebSocket communication
@@ -200,26 +206,27 @@ class TranscriptionHandler:
             while True:
                 # Receive WAV audio data directly from frontend
                 audio_data = await websocket.receive_bytes()
+                logger.info(f"Receive bytes with size: {sys.getsizeof(audio_data)}")
                 current_timestamp = time.time()
                 
                 try:
-                    # Initialize a response queue to receive the file path
-                    response_queue = queue.Queue(maxsize=1)
-                    # Enqueue the save request
-                    self.audio_save_queue.put_nowait((session_id, audio_data, current_timestamp, response_queue))
+                    # # Initialize a response queue to receive the file path
+                    # response_queue = queue.Queue(maxsize=1)
                     
-                    # Wait for the file path to be saved
-                    audio_file_path = response_queue.get()
+                    # # Enqueue the save request
+                    # self.audio_save_queue.put_nowait((session_id, audio_data, current_timestamp, response_queue))
                     
-                    if audio_file_path is None:
-                        raise Exception("Failed to save audio chunk.")
+                    # # Wait for the file path to be saved
+                    # audio_file_path = response_queue.get()
+                    
+                    # if audio_file_path is None:
+                    #     raise Exception("Failed to save audio chunk.")
                     
                     # Create transcription request with WAV data directly
                     request = TranscriptionRequest(
                         session_id=session_id,
                         audio_data=audio_data,
-                        timestamp=current_timestamp,
-                        audio_file_path=audio_file_path
+                        timestamp=current_timestamp
                     )
                     
                     try:
@@ -283,12 +290,12 @@ class TranscriptionHandler:
         except Exception as e:
             logger.error(f"Error during transcription worker shutdown: {e}")
         
-        try:
-            self.audio_save_worker.stop()
-            self.audio_save_worker.join(timeout=5.0)
-            if self.audio_save_worker.is_alive():
-                logger.warning("Audio save worker thread did not stop gracefully")
-        except Exception as e:
-            logger.error(f"Error during audio save worker shutdown: {e}")
+        # try:
+        #     self.audio_save_worker.stop()
+        #     self.audio_save_worker.join(timeout=5.0)
+        #     if self.audio_save_worker.is_alive():
+        #         logger.warning("Audio save worker thread did not stop gracefully")
+        # except Exception as e:
+        #     logger.error(f"Error during audio save worker shutdown: {e}")
 
 transcription_handler = TranscriptionHandler()
