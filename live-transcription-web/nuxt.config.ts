@@ -27,7 +27,7 @@ const config = {
         targetSampleRate: 16000,
         chunkDuration: 3,
         channels: 1,
-        transcriptionWsEndpoint: process.env.NUXT_PUBLIC_TRANSCRIPTION_WS_ENDPOINT || 'ws://localhost:8080/ws/transcribe',
+        transcriptionWsEndpoint: process.env.NUXT_PUBLIC_TRANSCRIPTION_WS_ENDPOINT || 'ws://localhost:8000/ws/transcribe',
         constraints: {
           echoCancellation: true,
           noiseSuppression: true,
